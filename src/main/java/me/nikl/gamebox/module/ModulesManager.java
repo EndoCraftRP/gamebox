@@ -38,9 +38,11 @@ import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.scheduler.BukkitRunnable;
+import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
-import org.yaml.snakeyaml.constructor.CustomClassLoaderConstructor;
+import org.yaml.snakeyaml.constructor.Constructor;
 import org.yaml.snakeyaml.representer.Representer;
+import org.yaml.snakeyaml.LoaderOptions;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -57,9 +59,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-/**
- * @author Niklas Eicker
- */
 public class ModulesManager implements Listener {
     private GameBox gameBox;
     private CloudService cloudService;
@@ -95,49 +94,6 @@ public class ModulesManager implements Listener {
             } catch (IOException e) {
                 e.printStackTrace();
             }
-        }
-    }
-
-    private void checkLocalModulesDependencies() {
-        ModuleUtility.DependencyReport report = ModuleUtility.checkDependencies(new HashMap<>(this.localModules));
-        if (report.isNotOk()) {
-            this.localModules = report.filter(this.localModules);
-            gameBox.getLogger().severe("Dependency issues while loading local modules");
-            logDependencyReport(report);
-        }
-    }
-
-    private void logDependencyReport(ModuleUtility.DependencyReport report) {
-        report.getLog().forEach(s -> gameBox.getLogger().severe(s));
-        gameBox.getLogger().severe("For more information please see:");
-        gameBox.getLogger().severe("  Semantic versioning: https://semver.org/");
-        gameBox.getLogger().severe("  Version ranges:      https://docs.npmjs.com/misc/semver#ranges");
-        gameBox.getLogger().severe("                       https://thoughtbot.com/blog/rubys-pessimistic-operator");
-    }
-
-    private void loadLocalModules() {
-        Map<String, LocalModule> modulesToLoad = localModules;
-        List<LocalModule> sortedModules = ModuleUtility.sortModulesByDependencies(modulesToLoad.values());
-        for (LocalModule localModule : sortedModules) {
-            gameBox.getLogger().fine("Loading module '" + localModule.getName() + "'...");
-            if (loadedModules.containsKey(localModule.getId())) {
-                gameBox.getLogger().fine("    already loaded! Skipping...");
-                continue;
-            }
-            loadModule(localModule);
-        }
-    }
-
-    private void loadModuleSettings() {
-        //Yaml yaml = new Yaml(new Constructor(ModulesSettings.class));
-        CustomClassLoaderConstructor constructor = new CustomClassLoaderConstructor(ModulesSettings.class.getClassLoader());
-        Representer representer = new Representer();
-        representer.getPropertyUtils().setSkipMissingProperties(true);
-        Yaml yaml = new Yaml(constructor, representer);
-        try {
-            this.modulesSettings = yaml.loadAs(new FileInputStream(modulesFile), ModulesSettings.class);
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
         }
     }
 
@@ -180,8 +136,20 @@ public class ModulesManager implements Listener {
         }
     }
 
+    private void loadModuleSettings() {
+        DumperOptions dumperOpts = new DumperOptions();
+        Representer rep = new Representer(dumperOpts);
+        rep.getPropertyUtils().setSkipMissingProperties(true);
+        LoaderOptions loaderOpts = new LoaderOptions();
+        Yaml yaml = new Yaml(new Constructor(ModulesSettings.class, loaderOpts), rep);
+        try {
+            this.modulesSettings = yaml.loadAs(new FileInputStream(modulesFile), ModulesSettings.class);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
+
     private void collectLocalModules() {
-        // ToDo: check the module settings! Ignore disabled modules
         List<File> jars = FileUtility.getAllJars(modulesDir);
         for (File jar : jars) {
             try {
@@ -196,6 +164,61 @@ public class ModulesManager implements Listener {
                 e.printStackTrace();
                 gameBox.getLogger().severe("Skipping this module...");
             }
+        }
+    }
+
+    private void checkLocalModulesDependencies() {
+        ModuleUtility.DependencyReport report = ModuleUtility.checkDependencies(new HashMap<>(this.localModules));
+        if (report.isNotOk()) {
+            this.localModules = report.filter(this.localModules);
+            gameBox.getLogger().severe("Dependency issues while loading local modules");
+            logDependencyReport(report);
+        }
+    }
+
+    private void logDependencyReport(ModuleUtility.DependencyReport report) {
+        report.getLog().forEach(s -> gameBox.getLogger().severe(s));
+        gameBox.getLogger().severe("For more information please see:");
+        gameBox.getLogger().severe("  Semantic versioning: https://semver.org/");
+        gameBox.getLogger().severe("  Version ranges:      https://docs.npmjs.com/misc/semver#ranges");
+        gameBox.getLogger().severe("                       https://thoughtbot.com/blog/rubys-pessimistic-operator");
+    }
+
+    private void loadLocalModules() {
+        Map<String, LocalModule> modulesToLoad = localModules;
+        List<LocalModule> sortedModules = ModuleUtility.sortModulesByDependencies(modulesToLoad.values());
+        for (LocalModule localModule : sortedModules) {
+            gameBox.getLogger().fine("Loading module '" + localModule.getName() + "'...");
+            if (loadedModules.containsKey(localModule.getId())) {
+                gameBox.getLogger().fine("    already loaded! Skipping...");
+                continue;
+            }
+            loadModule(localModule);
+        }
+    }
+
+    private void loadModule(LocalModule localModule) {
+        GameBoxModule gameBoxModule;
+        try {
+            GameBox.debug("    instantiating " + localModule.getName());
+            gameBoxModule = (GameBoxModule) FileUtility.getClassesFromJar(localModule.getModuleJar(), GameBoxModule.class).get(0).getConstructor().newInstance();
+            GameBox.debug("    done.");
+        } catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) {
+            gameBox.getLogger().warning("Failed to instantiate module '" + localModule.getName() + "' from the jar '" + localModule.getModuleJar().getName() + "'");
+            e.printStackTrace();
+            removeModule(localModule);
+            return;
+        }
+        gameBoxModule.setGameBox(gameBox);
+        gameBoxModule.setModuleData(localModule);
+        loadedModules.put(localModule.getId(), gameBoxModule);
+        try {
+            gameBoxModule.onEnable();
+        } catch (Throwable e) {
+            gameBox.getLogger().severe("Exception while enabling " + localModule.getName() + " @" + localModule.getVersionData().getVersion().toString());
+            e.printStackTrace();
+            gameBox.getLogger().severe("Skipping...");
+            removeModule(localModule);
         }
     }
 
@@ -217,8 +240,7 @@ public class ModulesManager implements Listener {
 
     private void registerAllLocalModules() {
         List<File> jars = FileUtility.getAllJars(modulesDir);
-
-        // ToDo: read version, dependencies into module settings and save defaults in module settings file
+        // à faire plus tard
     }
 
     public File getModulesDir() {
@@ -236,7 +258,6 @@ public class ModulesManager implements Listener {
                 GameBox.debug("Download complete. Loading the module...");
                 localModules.put(module.getId(), module);
                 addModuleToSettings(module.getId());
-                // ToDo: should be careful here with dependencies... check for any and if a reload is needed do it automatically, or ask the source of the installation for an OK
                 loadModule(module);
                 new ModuleInstalledEvent(module);
             }
@@ -268,33 +289,7 @@ public class ModulesManager implements Listener {
         }
     }
 
-    private void loadModule(LocalModule localModule) {
-        GameBoxModule gameBoxModule;
-        try {
-            GameBox.debug("    instantiating " + localModule.getName());
-            gameBoxModule = (GameBoxModule) FileUtility.getClassesFromJar(localModule.getModuleJar(), GameBoxModule.class).get(0).getConstructor().newInstance();
-            GameBox.debug("    done.");
-        } catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) {
-            gameBox.getLogger().warning("Failed to instantiate module '" + localModule.getName() + "' from the jar '" + localModule.getModuleJar().getName() + "'");
-            e.printStackTrace();
-            removeModule(localModule);
-            return;
-        }
-        gameBoxModule.setGameBox(gameBox);
-        gameBoxModule.setModuleData(localModule);
-        loadedModules.put(localModule.getId(), gameBoxModule);
-        try {
-            gameBoxModule.onEnable();
-        } catch (Throwable e) { // catch all and skip module if there is an exception in onEnable
-            gameBox.getLogger().severe("Exception while enabling " + localModule.getName() + " @" + localModule.getVersionData().getVersion().toString());
-            e.printStackTrace();
-            gameBox.getLogger().severe("Skipping...");
-            removeModule(localModule);
-        }
-    }
-
     public void removeModule(LocalModule localModule) {
-        // ToDo: unload parent modules first!
         GameBoxModule gameBoxModule = loadedModules.get(localModule.getId());
         if (gameBoxModule != null) {
             try {
@@ -333,8 +328,8 @@ public class ModulesManager implements Listener {
     }
 
     private void dumpModuleSettings() {
-        CustomClassLoaderConstructor constructor = new CustomClassLoaderConstructor(ModulesSettings.class.getClassLoader());
-        Yaml yaml = new Yaml(constructor);
+        LoaderOptions opts = new LoaderOptions();
+        Yaml yaml = new Yaml(new Constructor(ModulesSettings.class, opts));
         try {
             yaml.dump(modulesSettings, new FileWriter(modulesFile));
         } catch (IOException e) {
@@ -370,7 +365,6 @@ public class ModulesManager implements Listener {
         ModulesSettings.ModuleSettings updatedSettings = modulesSettings.getModuleSettings(event.getModule().getId());
         updatedSettings.setEnabled(true);
         updateModuleSettings(event.getModule().getId(), updatedSettings);
-        // add game buttons to players main guis
         gameBox.getPluginManager().getGuiManager().getMainGui().updateMainGuis();
     }
 
