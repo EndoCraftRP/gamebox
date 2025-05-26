@@ -136,15 +136,18 @@ public class ModulesManager implements Listener {
         }
     }
 
-    private void loadModuleSettings() {
+    private void dumpModuleSettings() {
         DumperOptions dumperOpts = new DumperOptions();
         Representer rep = new Representer(dumperOpts);
         rep.getPropertyUtils().setSkipMissingProperties(true);
-        LoaderOptions loaderOpts = new LoaderOptions();
-        Yaml yaml = new Yaml(new Constructor(ModulesSettings.class, loaderOpts), rep);
+
+        LoaderOptions opts = new LoaderOptions();
+        opts.setTagInspector(tag -> true);
+
+        Yaml yaml = new Yaml(new Constructor(ModulesSettings.class, opts), rep);
         try {
-            this.modulesSettings = yaml.loadAs(new FileInputStream(modulesFile), ModulesSettings.class);
-        } catch (FileNotFoundException e) {
+            yaml.dump(modulesSettings, new FileWriter(modulesFile));
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
@@ -203,7 +206,8 @@ public class ModulesManager implements Listener {
             GameBox.debug("    instantiating " + localModule.getName());
             gameBoxModule = (GameBoxModule) FileUtility.getClassesFromJar(localModule.getModuleJar(), GameBoxModule.class).get(0).getConstructor().newInstance();
             GameBox.debug("    done.");
-        } catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) {
+        } catch (InstantiationException | IllegalAccessException | NoSuchMethodException |
+                 InvocationTargetException e) {
             gameBox.getLogger().warning("Failed to instantiate module '" + localModule.getName() + "' from the jar '" + localModule.getModuleJar().getName() + "'");
             e.printStackTrace();
             removeModule(localModule);
@@ -251,7 +255,7 @@ public class ModulesManager implements Listener {
         if (checkDependencies(module, true).isNotOk()) {
             return;
         }
-        GameBox.debug("Install module '" + module.getName() +"@" + module.getVersion().toString() + "'");
+        GameBox.debug("Install module '" + module.getName() + "@" + module.getVersion().toString() + "'");
         cloudService.downloadModule(module, new DataBase.Callback<LocalModule>() {
             @Override
             public void onSuccess(LocalModule module) {
@@ -327,12 +331,18 @@ public class ModulesManager implements Listener {
         dumpModuleSettings();
     }
 
-    private void dumpModuleSettings() {
-        LoaderOptions opts = new LoaderOptions();
-        Yaml yaml = new Yaml(new Constructor(ModulesSettings.class, opts));
+    private void loadModuleSettings() {
+        DumperOptions dumperOpts = new DumperOptions();
+        Representer rep = new Representer(dumperOpts);
+        rep.getPropertyUtils().setSkipMissingProperties(true);
+
+        LoaderOptions loaderOpts = new LoaderOptions();
+        loaderOpts.setTagInspector(tag -> true);
+
+        Yaml yaml = new Yaml(new Constructor(ModulesSettings.class, loaderOpts), rep);
         try {
-            yaml.dump(modulesSettings, new FileWriter(modulesFile));
-        } catch (IOException e) {
+            this.modulesSettings = yaml.loadAs(new FileInputStream(modulesFile), ModulesSettings.class);
+        } catch (FileNotFoundException e) {
             e.printStackTrace();
         }
     }

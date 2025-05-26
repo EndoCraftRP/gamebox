@@ -25,6 +25,8 @@ import me.nikl.gamebox.utility.FileUtility;
 import me.nikl.gamebox.utility.GameBoxYmlBuilder;
 import me.nikl.gamebox.utility.ModuleUtility;
 import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.LoaderOptions;
+import org.yaml.snakeyaml.constructor.Constructor;
 
 import java.io.File;
 import java.io.IOException;
@@ -93,7 +95,16 @@ public class LocalModule extends VersionedModule {
                 throw new InvalidModuleException("No 'module.yml' found for " + jar.getName());
             }
             InputStream moduleFile = jarFile.getInputStream(moduleYml);
-            LocalModuleData moduleData = YAML.loadAs(new InputStreamReader(moduleFile), LocalModuleData.class);
+
+            LoaderOptions loaderOptions = new LoaderOptions();
+            loaderOptions.setAllowDuplicateKeys(false);
+            loaderOptions.setAllowRecursiveKeys(false);
+            loaderOptions.setTagInspector(tag -> true); 
+
+            Constructor constructor = new Constructor(LocalModuleData.class, loaderOptions);
+            Yaml customYaml = new Yaml(constructor);
+
+            LocalModuleData moduleData = customYaml.loadAs(new InputStreamReader(moduleFile), LocalModuleData.class);
             ModuleUtility.validateLocalModuleData(moduleData);
             ModuleUtility.fillDefaults(moduleData);
             jarFile.close();
